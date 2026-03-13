@@ -118,44 +118,158 @@ async function callGroq(apiKey, system, userText, max_tokens = 4000) {
   catch { const m = clean.match(/\{[\s\S]*\}/); if (m) return JSON.parse(m[0]); throw new Error("Format invalide. Réessayez."); }
 }
 
-// ── PDF export — capture DOM exact (html2canvas → jsPDF) ──────────
-async function generatePDF(element, nom) {
+// ── PDF print view (fond blanc, rendu hors écran) ─────────────────
+function renderPrintHTML(d) {
+  const exps = (d.experiences || []).map(e => `
+    <div class="exp">
+      <div class="exp-header">
+        <div>
+          <div class="exp-company">${e.entreprise || ""}</div>
+          <div class="exp-role">${e.poste || ""}</div>
+        </div>
+        <div class="exp-dates">${e.dates || ""}</div>
+      </div>
+      <ul>${(e.points || []).map(p => `<li>${p}</li>`).join("")}</ul>
+    </div>`).join("");
+
+  const comps = (d.competences || []).map(c =>
+    `<span class="tag">${c}</span>`).join("");
+
+  const fmts = (d.formation || []).map(f => `
+    <div class="formation-item">
+      <div class="f-diplome">${f.diplome || ""}</div>
+      <div class="f-inst">${f.institution || ""}</div>
+      <div class="f-year">${f.annee || ""}</div>
+    </div>`).join("");
+
+  return `
+    <div style="
+      width: 794px;
+      background: #ffffff;
+      font-family: Georgia, 'Times New Roman', serif;
+      color: #1a1a1a;
+      font-size: 13px;
+      line-height: 1.6;
+    ">
+      <style>
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        .header { background: #1a1f2e; padding: 32px 40px 26px; }
+        .header h1 { font-size: 30px; font-weight: 300; color: #e8e4dc; letter-spacing: -0.02em; margin-bottom: 4px; }
+        .header .titre { font-size: 14px; color: #c9a96e; margin-bottom: 8px; }
+        .header .contact { font-family: monospace; font-size: 10px; color: #8a8d9a; letter-spacing: 0.04em; }
+        .body { display: grid; grid-template-columns: 1fr 200px; gap: 36px; padding: 28px 40px 36px; background: #ffffff; }
+        .section { margin-bottom: 24px; }
+        .section-title { font-family: monospace; font-size: 9px; letter-spacing: 0.2em; text-transform: uppercase; color: #8b6914; border-bottom: 1px solid #e0d5c0; padding-bottom: 5px; margin-bottom: 12px; }
+        .profil { font-size: 12px; line-height: 1.8; color: #333; font-style: italic; }
+        .exp { margin-bottom: 16px; padding-left: 12px; border-left: 2px solid #e0d5c0; }
+        .exp-header { display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 4px; }
+        .exp-company { font-size: 13px; font-weight: bold; color: #1a1a1a; }
+        .exp-role { font-size: 12px; color: #8b6914; }
+        .exp-dates { font-family: monospace; font-size: 10px; color: #888; white-space: nowrap; }
+        ul { padding-left: 16px; margin-top: 6px; }
+        li { font-size: 11px; color: #333; line-height: 1.6; margin-bottom: 3px; }
+        .tags { display: flex; flex-wrap: wrap; gap: 5px; }
+        .tag { padding: 3px 8px; border: 1px solid #d4b87a; border-radius: 20px; font-size: 10px; color: #8b6914; font-family: Georgia, serif; }
+        .formation-item { margin-bottom: 12px; }
+        .f-diplome { font-size: 12px; font-weight: bold; color: #1a1a1a; }
+        .f-inst { font-size: 11px; color: #666; margin-top: 2px; }
+        .f-year { font-family: monospace; font-size: 10px; color: #999; margin-top: 1px; }
+        .footer { border-top: 1px solid #f0ece4; padding: 10px 40px; background: #faf9f7; }
+        .footer-text { font-family: monospace; font-size: 9px; color: #ccc; text-align: center; letter-spacing: 0.1em; }
+      </style>
+
+      <div class="header">
+        <h1>${d.nom || ""}</h1>
+        <div class="titre">${d.titre || ""}</div>
+        <div class="contact">${d.contact || ""}</div>
+      </div>
+
+      <div class="body">
+        <div>
+          <div class="section">
+            <div class="section-title">Profil professionnel</div>
+            <p class="profil">${d.profil || ""}</p>
+          </div>
+          <div class="section">
+            <div class="section-title">Expériences professionnelles</div>
+            ${exps}
+          </div>
+        </div>
+        <div>
+          <div class="section">
+            <div class="section-title">Compétences</div>
+            <div class="tags">${comps}</div>
+          </div>
+          <div class="section">
+            <div class="section-title">Formation</div>
+            ${fmts}
+          </div>
+        </div>
+      </div>
+
+      <div class="footer">
+        <div class="footer-text">GÉNÉRÉ PAR CIME · ATTEIGNEZ LE SOMMET DE VOTRE CARRIÈRE</div>
+      </div>
+    </div>
+  `;
+}
+
+async function generatePDF(cvData) {
   const { jsPDF } = window.jspdf;
 
-  // Capture le composant CVPreview tel qu'affiché à l'écran
-  const canvas = await window.html2canvas(element, {
-    scale: 2,              // haute résolution
-    useCORS: true,
-    backgroundColor: "#0F1218",
-    logging: false,
-    windowWidth: element.scrollWidth,
-    windowHeight: element.scrollHeight,
-  });
+  // Créer un conteneur hors écran avec fond blanc
+  const container = document.createElement("div");
+  container.style.cssText = `
+    position: fixed;
+    top: 0; left: -9999px;
+    width: 794px;
+    background: #ffffff;
+    z-index: -1;
+  `;
+  container.innerHTML = renderPrintHTML(cvData);
+  document.body.appendChild(container);
 
-  const imgData = canvas.toDataURL("image/png");
-  const imgW = 210; // largeur A4 en mm
-  const imgH = (canvas.height * imgW) / canvas.width;
+  // Laisser le temps au browser de rendre les styles
+  await new Promise(r => setTimeout(r, 300));
 
-  const doc = new jsPDF({
-    unit: "mm",
-    format: imgH > 297 ? [imgW, imgH] : "a4", // page custom si contenu long
-    orientation: "portrait",
-  });
+  try {
+    const canvas = await window.html2canvas(container.firstElementChild, {
+      scale: 2,
+      useCORS: true,
+      backgroundColor: "#ffffff",
+      logging: false,
+      width: 794,
+      windowWidth: 794,
+    });
 
-  // Si le contenu dépasse une page A4, on pagine
-  if (imgH <= 297) {
-    doc.addImage(imgData, "PNG", 0, 0, imgW, imgH);
-  } else {
+    const imgData = canvas.toDataURL("image/png");
+    const imgW = 210; // A4 mm
+    const imgH = (canvas.height * imgW) / canvas.width;
+
+    const doc = new jsPDF({ unit: "mm", format: "a4", orientation: "portrait" });
+
+    // Paginer si le contenu dépasse une page A4
     const pageH = 297;
-    let yPos = 0;
-    while (yPos < imgH) {
-      if (yPos > 0) doc.addPage();
-      doc.addImage(imgData, "PNG", 0, -yPos, imgW, imgH);
-      yPos += pageH;
-    }
-  }
+    if (imgH <= pageH) {
+      doc.addImage(imgData, "PNG", 0, 0, imgW, imgH);
+    } else {
+      const pxPerMm = canvas.width / imgW;
+      const pageHeightPx = pageH * pxPerMm;
+      let pageNum = 0;
+      let yOffset = 0;
 
-  doc.save(`CV_${(nom || "CV").replace(/\s+/g, "_")}_Cime.pdf`);
+      while (yOffset < canvas.height) {
+        if (pageNum > 0) doc.addPage();
+        doc.addImage(imgData, "PNG", 0, -(yOffset / pxPerMm), imgW, imgH);
+        yOffset += pageHeightPx;
+        pageNum++;
+      }
+    }
+
+    doc.save(`CV_${(cvData.nom || "CV").replace(/\s+/g, "_")}_Cime.pdf`);
+  } finally {
+    document.body.removeChild(container);
+  }
 }
 
 function buildHTMLDoc(d) {
@@ -248,9 +362,9 @@ function LoadingScreen({ message }) {
   );
 }
 
-const CVPreview = React.forwardRef(function CVPreview({ cvData }, ref) {
+function CVPreview({ cvData }) {
   return (
-    <div ref={ref} style={{ background: G.surface, border: `1px solid ${G.border}`, borderRadius: 14, overflow: "hidden" }}>
+    <div style={{ background: G.surface, border: `1px solid ${G.border}`, borderRadius: 14, overflow: "hidden" }}>
       <div style={{ padding: "26px 30px 20px", borderBottom: `1px solid ${G.border}`, background: "#0A0C10" }}>
         <h2 style={{ fontFamily: "Georgia,serif", fontSize: "clamp(20px,3vw,32px)", fontWeight: 300, margin: "0 0 4px", color: G.text }}>{cvData.nom}</h2>
         <div style={{ fontSize: 13, color: G.gold, marginBottom: 8 }}>{cvData.titre}</div>
@@ -280,21 +394,17 @@ const CVPreview = React.forwardRef(function CVPreview({ cvData }, ref) {
       </div>
     </div>
   );
-});
+}
 
-function ExportButtons({ cvData, pdfReady, previewRef }) {
+function ExportButtons({ cvData, pdfReady }) {
   const [exp, setExp] = useState(false);
 
   const handlePDF = async () => {
-    if (!pdfReady || !previewRef?.current) return;
+    if (!pdfReady) return;
     setExp(true);
-    try {
-      await generatePDF(previewRef.current, cvData.nom);
-    } catch (e) {
-      console.error("PDF error:", e);
-    } finally {
-      setExp(false);
-    }
+    try { await generatePDF(cvData); }
+    catch (e) { console.error("PDF error:", e); }
+    finally { setExp(false); }
   };
 
   const handleGDoc = () => {
@@ -308,7 +418,7 @@ function ExportButtons({ cvData, pdfReady, previewRef }) {
 
   return (
     <div style={{ display: "flex", gap: 7 }}>
-      <button onClick={handlePDF} disabled={!pdfReady || exp || !previewRef?.current}
+      <button onClick={handlePDF} disabled={!pdfReady || exp}
         style={{ padding: "7px 13px", borderRadius: 8, fontSize: 12, fontWeight: 500, cursor: pdfReady ? "pointer" : "wait", border: `1px solid ${G.gold}`, background: "transparent", color: G.gold, fontFamily: "inherit", opacity: exp ? 0.6 : 1 }}>
         {exp ? "⟳ Export..." : "⬇ PDF"}
       </button>
@@ -677,13 +787,12 @@ function AnalysisScreen({ analysis, onBack, onGenerate, onSettings }) {
 
 // ── SCREEN 3: Result ──────────────────────────────────────────────
 function ResultScreen({ cvData, onBack, onRefine, pdfReady, onSettings }) {
-  const previewRef = useRef();
   return (
     <div style={{ minHeight: "100vh", background: G.bg, fontFamily: "'DM Sans', sans-serif", color: G.text }}>
       <style>{`@keyframes fadeUp{from{opacity:0;transform:translateY(10px)}to{opacity:1;transform:translateY(0)}}.btn-ref:hover{background:#D4B47A!important}`}</style>
-      <Topbar title={cvData.nom} subtitle={cvData.titre} step={2} onBack={onBack} backLabel="Analyse" onSettings={onSettings}><ExportButtons cvData={cvData} pdfReady={pdfReady} previewRef={previewRef} /></Topbar>
+      <Topbar title={cvData.nom} subtitle={cvData.titre} step={2} onBack={onBack} backLabel="Analyse" onSettings={onSettings}><ExportButtons cvData={cvData} pdfReady={pdfReady} /></Topbar>
       <div style={{ maxWidth: 880, margin: "0 auto", padding: "24px 22px 80px", animation: "fadeUp 0.3s ease" }}>
-        <CVPreview cvData={cvData} ref={previewRef} />
+        <CVPreview cvData={cvData} />
         {(cvData.notes||[]).length > 0 && (
           <div style={{ marginTop: 13, background: G.surface, border: `1px solid ${G.border}`, borderRadius: 13, padding: 18 }}>
             <SectionLabel>💡 Changements appliqués par Cime</SectionLabel>
@@ -710,7 +819,7 @@ function RefineScreen({ cvData: initialCv, onBack, pdfReady, onSettings, config,
   const [cvData, setCvData] = useState(initialCv);
   const [messages, setMessages] = useState([{ role: "assistant", text: `Bonjour ! L'agent Cime est prêt à affiner votre CV.\n\n• **Contenu** — reformuler, renforcer le profil, ajuster les réalisations\n• **Compétences** — si une compétence manque, je vous demanderai confirmation\n• **Mise en forme** — raccourcir, réorganiser, changer le ton\n\nQue souhaitez-vous modifier ?`, type: "assistant" }]);
   const [input, setInput] = useState(""); const [thinking, setThinking] = useState(false); const [showPreview, setShowPreview] = useState(true);
-  const messagesEndRef = useRef(); const textareaRef = useRef(); const previewRef = useRef();
+  const messagesEndRef = useRef(); const textareaRef = useRef();
   useEffect(() => { messagesEndRef.current?.scrollIntoView({ behavior: "smooth" }); }, [messages]);
 
   const send = async (text) => {
@@ -739,7 +848,7 @@ function RefineScreen({ cvData: initialCv, onBack, pdfReady, onSettings, config,
       <style>{`@keyframes fadeUp{from{opacity:0;transform:translateY(5px)}to{opacity:1;transform:translateY(0)}}.sug:hover{border-color:#C9A96E!important;color:#C9A96E!important}.send:hover:not(:disabled){background:#D4B47A!important}textarea:focus{outline:none}::-webkit-scrollbar{width:4px}::-webkit-scrollbar-thumb{background:#1E2230;border-radius:2px}@keyframes bounce{0%,80%,100%{transform:translateY(0)}40%{transform:translateY(-5px)}}`}</style>
       <Topbar title={cvData.nom} subtitle={cvData.titre} step={3} onBack={onBack} backLabel="CV" onSettings={onSettings}>
         <button onClick={() => setShowPreview(!showPreview)} style={{ padding: "5px 11px", borderRadius: 8, fontSize: 11, cursor: "pointer", border: `1px solid ${showPreview ? G.gold : G.border2}`, background: showPreview ? G.goldDim : "transparent", color: showPreview ? G.gold : G.muted, fontFamily: "inherit", transition: "all 0.15s" }}>👁 {showPreview ? "Masquer" : "Voir CV"}</button>
-        <ExportButtons cvData={cvData} pdfReady={pdfReady} previewRef={previewRef} />
+        <ExportButtons cvData={cvData} pdfReady={pdfReady} />
       </Topbar>
       <div style={{ flex: 1, display: "grid", gridTemplateColumns: showPreview ? "1fr 1fr" : "1fr", overflow: "hidden" }}>
         <div style={{ display: "flex", flexDirection: "column", overflow: "hidden", borderRight: showPreview ? `1px solid ${G.border}` : "none" }}>
@@ -786,7 +895,7 @@ function RefineScreen({ cvData: initialCv, onBack, pdfReady, onSettings, config,
             <div style={{ fontFamily: "monospace", fontSize: 9, color: G.subtle, textAlign: "center", marginTop: 4 }}>Shift+Entrée pour nouvelle ligne</div>
           </div>
         </div>
-        {showPreview && <div style={{ overflowY: "auto", padding: "14px" }}><CVPreview cvData={cvData} ref={previewRef} /></div>}
+        {showPreview && <div style={{ overflowY: "auto", padding: "14px" }}><CVPreview cvData={cvData} /></div>}
       </div>
     </div>
   );
