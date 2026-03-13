@@ -1,15 +1,21 @@
 import { useState, useRef, useCallback, useEffect } from "react";
 import * as mammoth from "mammoth";
 
-// ── jsPDF ─────────────────────────────────────────────────────────
-function useJsPDF() {
+// ── html2canvas + jsPDF (capture DOM → PDF) ───────────────────────
+function usePdfLibs() {
   const [ready, setReady] = useState(false);
   useEffect(() => {
-    if (window.jspdf) { setReady(true); return; }
-    const s = document.createElement("script");
-    s.src = "https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js";
-    s.onload = () => setReady(true);
-    document.head.appendChild(s);
+    if (window.jspdf && window.html2canvas) { setReady(true); return; }
+    let loaded = 0;
+    const check = () => { loaded++; if (loaded === 2) setReady(true); };
+    const s1 = document.createElement("script");
+    s1.src = "https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js";
+    s1.onload = check;
+    const s2 = document.createElement("script");
+    s2.src = "https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js";
+    s2.onload = check;
+    if (!window.jspdf) document.head.appendChild(s1); else check();
+    if (!window.html2canvas) document.head.appendChild(s2); else check();
   }, []);
   return ready;
 }
@@ -112,33 +118,44 @@ async function callGroq(apiKey, system, userText, max_tokens = 4000) {
   catch { const m = clean.match(/\{[\s\S]*\}/); if (m) return JSON.parse(m[0]); throw new Error("Format invalide. Réessayez."); }
 }
 
-// ── PDF export ────────────────────────────────────────────────────
-function generatePDF(cvData) {
+// ── PDF export — capture DOM exact (html2canvas → jsPDF) ──────────
+async function generatePDF(element, nom) {
   const { jsPDF } = window.jspdf;
-  const doc = new jsPDF({ unit: "mm", format: "a4" });
-  const W = 210, margin = 18, colRight = 138, colRightW = 210 - colRight - margin;
-  let y = 0;
-  const gold=[180,140,80],dark=[20,20,24],mid=[90,90,100],light=[200,196,188];
-  doc.setFillColor(15,18,24);doc.rect(0,0,W,46,"F");
-  doc.setFont("times","normal");doc.setFontSize(26);doc.setTextColor(...light);doc.text(cvData.nom||"",margin,18);
-  doc.setFontSize(12);doc.setTextColor(...gold);doc.text(cvData.titre||"",margin,27);
-  doc.setFont("courier","normal");doc.setFontSize(8);doc.setTextColor(...mid);doc.text(cvData.contact||"",margin,35);
-  y=54;
-  function sT(label,x,yP,w){doc.setFont("courier","normal");doc.setFontSize(7.5);doc.setTextColor(...gold);doc.text(label.toUpperCase(),x,yP);doc.setDrawColor(...gold);doc.setLineWidth(0.3);doc.line(x,yP+1.5,x+w,yP+1.5);return yP+7;}
-  function chkPg(yP){if(yP>275){doc.addPage();doc.setFillColor(249,248,245);doc.rect(0,0,W,297,"F");doc.setFillColor(242,238,232);doc.rect(colRight-4,0,colRightW+8,297,"F");return 15;}return yP;}
-  doc.setFillColor(249,248,245);doc.rect(0,46,W,251,"F");
-  doc.setFillColor(242,238,232);doc.rect(colRight-4,46,colRightW+8,251,"F");
-  const leftW=colRight-margin-8;
-  y=sT("Profil professionnel",margin,y,leftW);
-  doc.setFont("times","italic");doc.setFontSize(10);doc.setTextColor(60,60,70);
-  const pL=doc.splitTextToSize(cvData.profil||"",leftW);doc.text(pL,margin,y);y+=pL.length*4.5+8;
-  y=chkPg(y);y=sT("Expériences",margin,y,leftW);
-  for(const exp of(cvData.experiences||[])){y=chkPg(y);const sY=y-2;doc.setFont("times","bold");doc.setFontSize(10.5);doc.setTextColor(...dark);doc.text(exp.entreprise||"",margin+4,y);doc.setFont("times","normal");doc.setFontSize(9.5);doc.setTextColor(...gold);y+=5;doc.text(exp.poste||"",margin+4,y);doc.setFont("courier","normal");doc.setFontSize(8);doc.setTextColor(...mid);doc.text(exp.dates||"",colRight-10,y-5,{align:"right"});y+=4;for(const pt of(exp.points||[])){y=chkPg(y);doc.setFont("times","normal");doc.setFontSize(9.5);doc.setTextColor(50,50,60);doc.text("•",margin+4,y);const ptL=doc.splitTextToSize(pt,leftW-10);doc.text(ptL,margin+8,y);y+=ptL.length*4.2;}doc.setDrawColor(...gold);doc.setLineWidth(0.8);doc.line(margin+1,sY,margin+1,y-1);y+=6;}
-  let ry=54;ry=sT("Compétences",colRight,ry,colRightW);
-  for(const comp of(cvData.competences||[])){const l=doc.splitTextToSize(comp,colRightW-4);const h=l.length*4+4;doc.setFillColor(201,169,110,30);doc.setDrawColor(...gold);doc.setLineWidth(0.3);doc.roundedRect(colRight,ry-3.5,colRightW,h,2,2,"FD");doc.setFont("times","normal");doc.setFontSize(8.5);doc.setTextColor(...dark);doc.text(l,colRight+3,ry);ry+=h+2;}
-  ry+=6;ry=sT("Formation",colRight,ry,colRightW);
-  for(const f of(cvData.formation||[])){doc.setFont("times","bold");doc.setFontSize(9);doc.setTextColor(...dark);const dl=doc.splitTextToSize(f.diplome||"",colRightW);doc.text(dl,colRight,ry);ry+=dl.length*4;doc.setFont("times","normal");doc.setFontSize(8.5);doc.setTextColor(...mid);doc.text(f.institution||"",colRight,ry);ry+=4;doc.setFont("courier","normal");doc.setFontSize(8);doc.text(f.annee||"",colRight,ry);ry+=8;}
-  doc.save(`CV_${(cvData.nom||"CV").replace(/\s+/g,"_")}_Cime.pdf`);
+
+  // Capture le composant CVPreview tel qu'affiché à l'écran
+  const canvas = await window.html2canvas(element, {
+    scale: 2,              // haute résolution
+    useCORS: true,
+    backgroundColor: "#0F1218",
+    logging: false,
+    windowWidth: element.scrollWidth,
+    windowHeight: element.scrollHeight,
+  });
+
+  const imgData = canvas.toDataURL("image/png");
+  const imgW = 210; // largeur A4 en mm
+  const imgH = (canvas.height * imgW) / canvas.width;
+
+  const doc = new jsPDF({
+    unit: "mm",
+    format: imgH > 297 ? [imgW, imgH] : "a4", // page custom si contenu long
+    orientation: "portrait",
+  });
+
+  // Si le contenu dépasse une page A4, on pagine
+  if (imgH <= 297) {
+    doc.addImage(imgData, "PNG", 0, 0, imgW, imgH);
+  } else {
+    const pageH = 297;
+    let yPos = 0;
+    while (yPos < imgH) {
+      if (yPos > 0) doc.addPage();
+      doc.addImage(imgData, "PNG", 0, -yPos, imgW, imgH);
+      yPos += pageH;
+    }
+  }
+
+  doc.save(`CV_${(nom || "CV").replace(/\s+/g, "_")}_Cime.pdf`);
 }
 
 function buildHTMLDoc(d) {
@@ -231,9 +248,9 @@ function LoadingScreen({ message }) {
   );
 }
 
-function CVPreview({ cvData }) {
+const CVPreview = React.forwardRef(function CVPreview({ cvData }, ref) {
   return (
-    <div style={{ background: G.surface, border: `1px solid ${G.border}`, borderRadius: 14, overflow: "hidden" }}>
+    <div ref={ref} style={{ background: G.surface, border: `1px solid ${G.border}`, borderRadius: 14, overflow: "hidden" }}>
       <div style={{ padding: "26px 30px 20px", borderBottom: `1px solid ${G.border}`, background: "#0A0C10" }}>
         <h2 style={{ fontFamily: "Georgia,serif", fontSize: "clamp(20px,3vw,32px)", fontWeight: 300, margin: "0 0 4px", color: G.text }}>{cvData.nom}</h2>
         <div style={{ fontSize: 13, color: G.gold, marginBottom: 8 }}>{cvData.titre}</div>
@@ -263,15 +280,38 @@ function CVPreview({ cvData }) {
       </div>
     </div>
   );
-}
+});
 
-function ExportButtons({ cvData, pdfReady }) {
+function ExportButtons({ cvData, pdfReady, previewRef }) {
   const [exp, setExp] = useState(false);
-  const handlePDF = () => { if (!pdfReady) return; setExp(true); setTimeout(() => { try { generatePDF(cvData); } finally { setExp(false); } }, 100); };
-  const handleGDoc = () => { const blob = new Blob([buildHTMLDoc(cvData)], { type: "text/html;charset=utf-8" }); const a = document.createElement("a"); a.href = URL.createObjectURL(blob); a.download = `CV_${(cvData.nom||"CV").replace(/\s+/g,"_")}_Cime.html`; a.click(); URL.revokeObjectURL(a.href); };
+
+  const handlePDF = async () => {
+    if (!pdfReady || !previewRef?.current) return;
+    setExp(true);
+    try {
+      await generatePDF(previewRef.current, cvData.nom);
+    } catch (e) {
+      console.error("PDF error:", e);
+    } finally {
+      setExp(false);
+    }
+  };
+
+  const handleGDoc = () => {
+    const blob = new Blob([buildHTMLDoc(cvData)], { type: "text/html;charset=utf-8" });
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(blob);
+    a.download = `CV_${(cvData.nom||"CV").replace(/\s+/g,"_")}_Cime.html`;
+    a.click();
+    URL.revokeObjectURL(a.href);
+  };
+
   return (
     <div style={{ display: "flex", gap: 7 }}>
-      <button onClick={handlePDF} disabled={!pdfReady || exp} style={{ padding: "7px 13px", borderRadius: 8, fontSize: 12, fontWeight: 500, cursor: pdfReady ? "pointer" : "wait", border: `1px solid ${G.gold}`, background: "transparent", color: G.gold, fontFamily: "inherit", opacity: exp ? 0.6 : 1 }}>{exp ? "⟳" : "⬇"} PDF</button>
+      <button onClick={handlePDF} disabled={!pdfReady || exp || !previewRef?.current}
+        style={{ padding: "7px 13px", borderRadius: 8, fontSize: 12, fontWeight: 500, cursor: pdfReady ? "pointer" : "wait", border: `1px solid ${G.gold}`, background: "transparent", color: G.gold, fontFamily: "inherit", opacity: exp ? 0.6 : 1 }}>
+        {exp ? "⟳ Export..." : "⬇ PDF"}
+      </button>
       <button onClick={handleGDoc} style={{ padding: "7px 13px", borderRadius: 8, fontSize: 12, fontWeight: 500, cursor: "pointer", border: "none", background: G.gold, color: "#080A0E", fontFamily: "inherit" }}>📑 Google Docs</button>
     </div>
   );
@@ -637,12 +677,13 @@ function AnalysisScreen({ analysis, onBack, onGenerate, onSettings }) {
 
 // ── SCREEN 3: Result ──────────────────────────────────────────────
 function ResultScreen({ cvData, onBack, onRefine, pdfReady, onSettings }) {
+  const previewRef = useRef();
   return (
     <div style={{ minHeight: "100vh", background: G.bg, fontFamily: "'DM Sans', sans-serif", color: G.text }}>
       <style>{`@keyframes fadeUp{from{opacity:0;transform:translateY(10px)}to{opacity:1;transform:translateY(0)}}.btn-ref:hover{background:#D4B47A!important}`}</style>
-      <Topbar title={cvData.nom} subtitle={cvData.titre} step={2} onBack={onBack} backLabel="Analyse" onSettings={onSettings}><ExportButtons cvData={cvData} pdfReady={pdfReady} /></Topbar>
+      <Topbar title={cvData.nom} subtitle={cvData.titre} step={2} onBack={onBack} backLabel="Analyse" onSettings={onSettings}><ExportButtons cvData={cvData} pdfReady={pdfReady} previewRef={previewRef} /></Topbar>
       <div style={{ maxWidth: 880, margin: "0 auto", padding: "24px 22px 80px", animation: "fadeUp 0.3s ease" }}>
-        <CVPreview cvData={cvData} />
+        <CVPreview cvData={cvData} ref={previewRef} />
         {(cvData.notes||[]).length > 0 && (
           <div style={{ marginTop: 13, background: G.surface, border: `1px solid ${G.border}`, borderRadius: 13, padding: 18 }}>
             <SectionLabel>💡 Changements appliqués par Cime</SectionLabel>
@@ -669,7 +710,7 @@ function RefineScreen({ cvData: initialCv, onBack, pdfReady, onSettings, config,
   const [cvData, setCvData] = useState(initialCv);
   const [messages, setMessages] = useState([{ role: "assistant", text: `Bonjour ! L'agent Cime est prêt à affiner votre CV.\n\n• **Contenu** — reformuler, renforcer le profil, ajuster les réalisations\n• **Compétences** — si une compétence manque, je vous demanderai confirmation\n• **Mise en forme** — raccourcir, réorganiser, changer le ton\n\nQue souhaitez-vous modifier ?`, type: "assistant" }]);
   const [input, setInput] = useState(""); const [thinking, setThinking] = useState(false); const [showPreview, setShowPreview] = useState(true);
-  const messagesEndRef = useRef(); const textareaRef = useRef();
+  const messagesEndRef = useRef(); const textareaRef = useRef(); const previewRef = useRef();
   useEffect(() => { messagesEndRef.current?.scrollIntoView({ behavior: "smooth" }); }, [messages]);
 
   const send = async (text) => {
@@ -698,7 +739,7 @@ function RefineScreen({ cvData: initialCv, onBack, pdfReady, onSettings, config,
       <style>{`@keyframes fadeUp{from{opacity:0;transform:translateY(5px)}to{opacity:1;transform:translateY(0)}}.sug:hover{border-color:#C9A96E!important;color:#C9A96E!important}.send:hover:not(:disabled){background:#D4B47A!important}textarea:focus{outline:none}::-webkit-scrollbar{width:4px}::-webkit-scrollbar-thumb{background:#1E2230;border-radius:2px}@keyframes bounce{0%,80%,100%{transform:translateY(0)}40%{transform:translateY(-5px)}}`}</style>
       <Topbar title={cvData.nom} subtitle={cvData.titre} step={3} onBack={onBack} backLabel="CV" onSettings={onSettings}>
         <button onClick={() => setShowPreview(!showPreview)} style={{ padding: "5px 11px", borderRadius: 8, fontSize: 11, cursor: "pointer", border: `1px solid ${showPreview ? G.gold : G.border2}`, background: showPreview ? G.goldDim : "transparent", color: showPreview ? G.gold : G.muted, fontFamily: "inherit", transition: "all 0.15s" }}>👁 {showPreview ? "Masquer" : "Voir CV"}</button>
-        <ExportButtons cvData={cvData} pdfReady={pdfReady} />
+        <ExportButtons cvData={cvData} pdfReady={pdfReady} previewRef={previewRef} />
       </Topbar>
       <div style={{ flex: 1, display: "grid", gridTemplateColumns: showPreview ? "1fr 1fr" : "1fr", overflow: "hidden" }}>
         <div style={{ display: "flex", flexDirection: "column", overflow: "hidden", borderRight: showPreview ? `1px solid ${G.border}` : "none" }}>
@@ -745,7 +786,7 @@ function RefineScreen({ cvData: initialCv, onBack, pdfReady, onSettings, config,
             <div style={{ fontFamily: "monospace", fontSize: 9, color: G.subtle, textAlign: "center", marginTop: 4 }}>Shift+Entrée pour nouvelle ligne</div>
           </div>
         </div>
-        {showPreview && <div style={{ overflowY: "auto", padding: "14px" }}><CVPreview cvData={cvData} /></div>}
+        {showPreview && <div style={{ overflowY: "auto", padding: "14px" }}><CVPreview cvData={cvData} ref={previewRef} /></div>}
       </div>
     </div>
   );
@@ -761,7 +802,7 @@ export default function App() {
   const [analysis, setAnalysis] = useState(null);
   const [cvData, setCvData] = useState(null);
   const [config, setConfig] = useState({ ...DEFAULT_CONFIG });
-  const pdfReady = useJsPDF();
+  const pdfReady = usePdfLibs();
 
   const handleKeySubmit = (key) => {
     localStorage.setItem("cime_groq_key", key);
