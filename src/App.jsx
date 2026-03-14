@@ -88,43 +88,43 @@ function buildAnalysisSystem(config) {
 INSTRUCTIONS: ${config.analyse}
 TON: ${config.ton}
 
-IMPORTANT: Retourne UNIQUEMENT un objet JSON compact, sans markdown, sans texte avant ou après.
-Maximum 4 points_forts, 4 ecarts, 3 recommandations. Sois concis dans les "detail".
+Retourne UNIQUEMENT un objet JSON valide, sans markdown ni texte avant/après.
+Sois concis dans les textes (1-2 phrases par champ).
+N'utilise jamais de guillemets doubles à l'intérieur des valeurs de texte — utilise des apostrophes si nécessaire.
 
-Format strict:
-{"score":72,"titre_poste":"...","nom_candidat":"...","resume":"2 phrases max","points_forts":[{"titre":"court","detail":"1 phrase"}],"ecarts":[{"titre":"court","detail":"1 phrase","niveau":"critique|important|mineur"}],"recommandations":["phrase courte"]}`;
+{"score":72,"titre_poste":"...","nom_candidat":"...","resume":"...","points_forts":[{"titre":"...","detail":"..."}],"ecarts":[{"titre":"...","detail":"...","niveau":"critique|important|mineur"}],"recommandations":["..."]}`;
 }
 
 function buildCVSystem(config) {
-  return `Tu es un expert RH. Réécris le CV selon l'analyse fournie.
+  return `Tu es un expert RH. Réécris le CV en préservant TOUT le contenu original — n'omets aucune expérience, aucune réalisation, aucune compétence. Adapte uniquement le vocabulaire et la formulation.
 
 INSTRUCTIONS: ${config.generation}
 TON: ${config.ton}
 
-IMPORTANT: Retourne UNIQUEMENT un objet JSON compact, sans markdown, sans texte avant ou après.
-Maximum 3 points par expérience. Maximum 8 compétences. Profil = 2 phrases max.
+Retourne UNIQUEMENT un objet JSON valide, sans markdown ni texte avant/après.
+RÈGLES JSON STRICTES:
+- N'utilise jamais de guillemets doubles dans les valeurs texte — remplace par des apostrophes
+- Échappe les caractères spéciaux
+- Tous les champs sont obligatoires
 
-Format strict:
-{"nom":"...","titre":"...","contact":"...","profil":"2 phrases","experiences":[{"entreprise":"...","poste":"...","dates":"...","points":["point 1","point 2","point 3"]}],"competences":["..."],"formation":[{"diplome":"...","institution":"...","annee":"..."}],"notes":["changement 1","changement 2"]}`;
+{"nom":"...","titre":"...","contact":"...","profil":"...","experiences":[{"entreprise":"...","poste":"...","dates":"...","points":["..."]}],"competences":["..."],"formation":[{"diplome":"...","institution":"...","annee":"..."}],"notes":["..."]}`;
 }
 
 function buildRefineSystem(config) {
-  return `Tu es un expert en rédaction de CV.
+  return `Tu es un expert en rédaction de CV. Préserve tout le contenu — ne raccourcis rien sans demande explicite.
 
 INSTRUCTIONS: ${config.affinement}
 TON: ${config.ton}
 
-IMPORTANT: Retourne UNIQUEMENT un objet JSON compact, sans markdown, sans texte avant ou après.
+Retourne UNIQUEMENT un objet JSON valide, sans markdown ni texte avant/après.
+N'utilise pas de guillemets doubles dans les valeurs texte.
 
-Si confirmation requise:
-{"action":"confirm","question":"question courte","options":["Oui","Non"],"cv":{...cv inchangé...}}
-
-Si modification directe:
-{"action":"update","cv":{...cv complet mis à jour...},"explication":"1 phrase"}`;
+Si confirmation requise: {"action":"confirm","question":"...","options":["Oui","Non"],"cv":{...cv complet inchangé...}}
+Si modification: {"action":"update","cv":{...cv complet mis à jour...},"explication":"..."}`;
 }
 
 // ── Groq API call ─────────────────────────────────────────────────
-async function callGroq(apiKey, system, userText, max_tokens = 6000) {
+async function callGroq(apiKey, system, userText, max_tokens = 8000) {
   const resp = await fetch("/api/groq", {
     method: "POST",
     headers: {
@@ -168,100 +168,179 @@ async function callGroq(apiKey, system, userText, max_tokens = 6000) {
   }
 }
 
-// ── PDF print view (fond blanc, rendu hors écran) ─────────────────
+// ── PDF print view — CV professionnel fond blanc ──────────────────
 function renderPrintHTML(d) {
+  const escHtml = (s) => (s || "")
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;");
+
   const exps = (d.experiences || []).map(e => `
     <div class="exp">
-      <div class="exp-header">
-        <div>
-          <div class="exp-company">${e.entreprise || ""}</div>
-          <div class="exp-role">${e.poste || ""}</div>
+      <div class="exp-top">
+        <div class="exp-left">
+          <span class="exp-company">${escHtml(e.entreprise)}</span>
+          <span class="exp-sep"> · </span>
+          <span class="exp-role">${escHtml(e.poste)}</span>
         </div>
-        <div class="exp-dates">${e.dates || ""}</div>
+        <span class="exp-dates">${escHtml(e.dates)}</span>
       </div>
-      <ul>${(e.points || []).map(p => `<li>${p}</li>`).join("")}</ul>
+      <ul class="exp-points">${(e.points || []).map(p => `<li>${escHtml(p)}</li>`).join("")}</ul>
     </div>`).join("");
 
   const comps = (d.competences || []).map(c =>
-    `<span class="tag">${c}</span>`).join("");
+    `<span class="tag">${escHtml(c)}</span>`).join("");
 
   const fmts = (d.formation || []).map(f => `
-    <div class="formation-item">
-      <div class="f-diplome">${f.diplome || ""}</div>
-      <div class="f-inst">${f.institution || ""}</div>
-      <div class="f-year">${f.annee || ""}</div>
+    <div class="form-item">
+      <span class="form-diplome">${escHtml(f.diplome)}</span>
+      ${f.institution ? `<span class="form-sep"> · </span><span class="form-inst">${escHtml(f.institution)}</span>` : ""}
+      ${f.annee ? `<span class="form-year"> (${escHtml(f.annee)})</span>` : ""}
     </div>`).join("");
 
-  return `
-    <div style="
-      width: 794px;
-      background: #ffffff;
-      font-family: Georgia, 'Times New Roman', serif;
-      color: #1a1a1a;
-      font-size: 13px;
-      line-height: 1.6;
-    ">
-      <style>
-        * { box-sizing: border-box; margin: 0; padding: 0; }
-        .header { background: #1a1f2e; padding: 32px 40px 26px; }
-        .header h1 { font-size: 30px; font-weight: 300; color: #e8e4dc; letter-spacing: -0.02em; margin-bottom: 4px; }
-        .header .titre { font-size: 14px; color: #c9a96e; margin-bottom: 8px; }
-        .header .contact { font-family: monospace; font-size: 10px; color: #8a8d9a; letter-spacing: 0.04em; }
-        .body { display: grid; grid-template-columns: 1fr 200px; gap: 36px; padding: 28px 40px 36px; background: #ffffff; }
-        .section { margin-bottom: 24px; }
-        .section-title { font-family: monospace; font-size: 9px; letter-spacing: 0.2em; text-transform: uppercase; color: #8b6914; border-bottom: 1px solid #e0d5c0; padding-bottom: 5px; margin-bottom: 12px; }
-        .profil { font-size: 12px; line-height: 1.8; color: #333; font-style: italic; }
-        .exp { margin-bottom: 16px; padding-left: 12px; border-left: 2px solid #e0d5c0; }
-        .exp-header { display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 4px; }
-        .exp-company { font-size: 13px; font-weight: bold; color: #1a1a1a; }
-        .exp-role { font-size: 12px; color: #8b6914; }
-        .exp-dates { font-family: monospace; font-size: 10px; color: #888; white-space: nowrap; }
-        ul { padding-left: 16px; margin-top: 6px; }
-        li { font-size: 11px; color: #333; line-height: 1.6; margin-bottom: 3px; }
-        .tags { display: flex; flex-wrap: wrap; gap: 5px; }
-        .tag { padding: 3px 8px; border: 1px solid #d4b87a; border-radius: 20px; font-size: 10px; color: #8b6914; font-family: Georgia, serif; }
-        .formation-item { margin-bottom: 12px; }
-        .f-diplome { font-size: 12px; font-weight: bold; color: #1a1a1a; }
-        .f-inst { font-size: 11px; color: #666; margin-top: 2px; }
-        .f-year { font-family: monospace; font-size: 10px; color: #999; margin-top: 1px; }
-        .footer { border-top: 1px solid #f0ece4; padding: 10px 40px; background: #faf9f7; }
-        .footer-text { font-family: monospace; font-size: 9px; color: #ccc; text-align: center; letter-spacing: 0.1em; }
-      </style>
+  return `<div class="cv-root">
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  .cv-root {
+    width: 794px;
+    background: #ffffff;
+    font-family: 'Arial', Helvetica, sans-serif;
+    color: #1c1c1c;
+    font-size: 11px;
+    line-height: 1.55;
+  }
+  /* ── HEADER ── */
+  .cv-header {
+    padding: 36px 48px 24px;
+    border-bottom: 2px solid #1c1c1c;
+  }
+  .cv-name {
+    font-size: 26px;
+    font-weight: 700;
+    letter-spacing: -0.02em;
+    color: #1c1c1c;
+    margin-bottom: 3px;
+  }
+  .cv-title {
+    font-size: 13px;
+    font-weight: 400;
+    color: #555;
+    margin-bottom: 10px;
+    letter-spacing: 0.02em;
+  }
+  .cv-contact {
+    font-size: 10px;
+    color: #777;
+    letter-spacing: 0.03em;
+  }
+  /* ── BODY ── */
+  .cv-body {
+    padding: 0 48px 40px;
+  }
+  /* ── SECTION ── */
+  .section {
+    margin-top: 22px;
+  }
+  .section-title {
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: 0.18em;
+    text-transform: uppercase;
+    color: #1c1c1c;
+    padding-bottom: 5px;
+    border-bottom: 1px solid #1c1c1c;
+    margin-bottom: 12px;
+  }
+  /* ── PROFIL ── */
+  .profil-text {
+    font-size: 11px;
+    color: #333;
+    line-height: 1.65;
+  }
+  /* ── EXPERIENCES ── */
+  .exp { margin-bottom: 14px; }
+  .exp-top {
+    display: flex;
+    justify-content: space-between;
+    align-items: baseline;
+    flex-wrap: wrap;
+    gap: 4px;
+    margin-bottom: 4px;
+  }
+  .exp-left { flex: 1; }
+  .exp-company { font-weight: 700; font-size: 11.5px; color: #1c1c1c; }
+  .exp-sep { color: #aaa; }
+  .exp-role { font-size: 11px; color: #444; font-style: italic; }
+  .exp-dates { font-size: 10px; color: #888; white-space: nowrap; flex-shrink: 0; }
+  .exp-points { padding-left: 14px; margin-top: 3px; }
+  .exp-points li {
+    font-size: 10.5px;
+    color: #333;
+    line-height: 1.55;
+    margin-bottom: 2px;
+  }
+  /* ── COMPÉTENCES ── */
+  .tags { display: flex; flex-wrap: wrap; gap: 5px; }
+  .tag {
+    padding: 3px 9px;
+    border: 1px solid #ccc;
+    border-radius: 3px;
+    font-size: 10px;
+    color: #333;
+    background: #f9f9f9;
+  }
+  /* ── FORMATION ── */
+  .form-item { margin-bottom: 6px; font-size: 11px; }
+  .form-diplome { font-weight: 700; color: #1c1c1c; }
+  .form-sep { color: #aaa; }
+  .form-inst { color: #555; }
+  .form-year { color: #888; }
+  /* ── FOOTER ── */
+  .cv-footer {
+    border-top: 1px solid #eee;
+    padding: 8px 48px;
+    text-align: center;
+    font-size: 8px;
+    color: #bbb;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+  }
+</style>
 
-      <div class="header">
-        <h1>${d.nom || ""}</h1>
-        <div class="titre">${d.titre || ""}</div>
-        <div class="contact">${d.contact || ""}</div>
-      </div>
+<div class="cv-header">
+  <div class="cv-name">${escHtml(d.nom)}</div>
+  <div class="cv-title">${escHtml(d.titre)}</div>
+  <div class="cv-contact">${escHtml(d.contact)}</div>
+</div>
 
-      <div class="body">
-        <div>
-          <div class="section">
-            <div class="section-title">Profil professionnel</div>
-            <p class="profil">${d.profil || ""}</p>
-          </div>
-          <div class="section">
-            <div class="section-title">Expériences professionnelles</div>
-            ${exps}
-          </div>
-        </div>
-        <div>
-          <div class="section">
-            <div class="section-title">Compétences</div>
-            <div class="tags">${comps}</div>
-          </div>
-          <div class="section">
-            <div class="section-title">Formation</div>
-            ${fmts}
-          </div>
-        </div>
-      </div>
+<div class="cv-body">
+  ${d.profil ? `
+  <div class="section">
+    <div class="section-title">Profil professionnel</div>
+    <div class="profil-text">${escHtml(d.profil)}</div>
+  </div>` : ""}
 
-      <div class="footer">
-        <div class="footer-text">GÉNÉRÉ PAR CIME · ATTEIGNEZ LE SOMMET DE VOTRE CARRIÈRE</div>
-      </div>
-    </div>
-  `;
+  ${(d.experiences || []).length > 0 ? `
+  <div class="section">
+    <div class="section-title">Expériences professionnelles</div>
+    ${exps}
+  </div>` : ""}
+
+  ${(d.competences || []).length > 0 ? `
+  <div class="section">
+    <div class="section-title">Compétences</div>
+    <div class="tags">${comps}</div>
+  </div>` : ""}
+
+  ${(d.formation || []).length > 0 ? `
+  <div class="section">
+    <div class="section-title">Formation</div>
+    ${fmts}
+  </div>` : ""}
+</div>
+
+<div class="cv-footer">Optimisé par Cime · Atteignez le sommet de votre carrière</div>
+</div>`;
 }
 
 async function generatePDF(cvData) {
