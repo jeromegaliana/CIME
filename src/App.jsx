@@ -628,13 +628,15 @@ function SettingsScreen({ config, onSave, onBack, apiKey, onChangeKey }) {
 }
 
 // ── SCREEN 1: Input ───────────────────────────────────────────────
-function InputScreen({ onAnalyze, onSettings }) {
+function InputScreen({ onAnalyze, onSettings, error: globalError, onClearError }) {
   const [cvFile, setCvFile] = useState(null);
   const [cvText, setCvText] = useState("");
   const [jobDesc, setJobDesc] = useState(""); const [error, setError] = useState(""); const [dragging, setDragging] = useState(false);
   const [extracting, setExtracting] = useState(false);
   const fileRef = useRef();
   const pdfJsReady = usePdfJs();
+
+  const displayError = globalError || error;
 
   const readFile = useCallback(async (file) => {
     const ext = file.name.split(".").pop().toLowerCase();
@@ -702,7 +704,25 @@ function InputScreen({ onAnalyze, onSettings }) {
               {jobDesc.length > 0 && <div style={{ marginTop: 5, textAlign: "right", fontFamily: "monospace", fontSize: 10, color: G.subtle }}>{jobDesc.trim().split(/\s+/).length} mots</div>}
             </div>
           </div>
-          {error && <div style={{ padding: "11px 14px", background: G.redBg, border: `1px solid ${G.redBorder}`, borderRadius: 10, color: G.red, fontSize: 13, marginBottom: 13 }}>{error}</div>}
+          {displayError && (
+            <div style={{ padding: "12px 16px", background: G.redBg, border: `1px solid ${G.redBorder}`, borderRadius: 10, color: G.red, fontSize: 13, marginBottom: 13, display: "flex", alignItems: "flex-start", gap: 10 }}>
+              <span style={{ flexShrink: 0, marginTop: 1 }}>⚠</span>
+              <div style={{ flex: 1 }}>
+                <div style={{ fontWeight: 500, marginBottom: 3 }}>Erreur</div>
+                <div style={{ opacity: 0.9 }}>{displayError}</div>
+                {displayError.includes("Failed to fetch") && (
+                  <div style={{ marginTop: 8, fontSize: 12, opacity: 0.8 }}>
+                    → Vérifiez que l'app est déployée sur Vercel (le proxy /api/groq est requis) et que votre clé API est valide.
+                  </div>
+                )}
+                {displayError.includes("401") && (
+                  <div style={{ marginTop: 8, fontSize: 12, opacity: 0.8 }}>
+                    → Clé API invalide. <button onClick={() => { onClearError?.(); localStorage.removeItem("cime_groq_key"); window.location.reload(); }} style={{ background: "none", border: "none", cursor: "pointer", color: G.gold, fontFamily: "inherit", fontSize: 12, padding: 0, textDecoration: "underline" }}>Changer de clé</button>
+                  </div>
+                )}
+              </div>
+            </div>
+          )}
           <button className="btn-go" onClick={() => onAnalyze(cvText, jobDesc)} disabled={!canGo} style={{ width: "100%", padding: "16px 24px", background: canGo ? G.gold : "#12151C", color: canGo ? "#080A0E" : G.subtle, border: "none", borderRadius: 10, fontFamily: "inherit", fontSize: 15, fontWeight: 500, cursor: canGo ? "pointer" : "not-allowed", transition: "all 0.2s", display: "flex", alignItems: "center", justifyContent: "center", gap: 10 }}>
             <svg width="13" height="11" viewBox="0 0 13 11" fill="none"><path d="M6.5 1 L12 10 L1 10 Z" stroke="currentColor" strokeWidth="1.5" fill="none" strokeLinejoin="round" /></svg>
             Analyser la correspondance
@@ -911,6 +931,7 @@ export default function App() {
   const [analysis, setAnalysis] = useState(null);
   const [cvData, setCvData] = useState(null);
   const [config, setConfig] = useState({ ...DEFAULT_CONFIG });
+  const [globalError, setGlobalError] = useState("");
   const pdfReady = usePdfLibs();
 
   const handleKeySubmit = (key) => {
@@ -925,28 +946,39 @@ export default function App() {
   const goSettings = () => { setPrevScreen(screen); setScreen("settings"); };
 
   const handleAnalyze = async (cv, job) => {
-    setCvText(cv); setJobDesc(job); setScreen("analyzing");
+    setCvText(cv); setJobDesc(job);
+    setGlobalError("");
+    setScreen("analyzing");
     try {
       const result = await callGroq(apiKey, buildAnalysisSystem(config), `CV:\n\n${cv}\n\n---\n\nOffre d'emploi:\n\n${job}\n\nRetourne UNIQUEMENT le JSON.`);
-      setAnalysis(result); setScreen("analysis");
-    } catch (e) { setScreen("input"); }
+      setAnalysis(result);
+      setScreen("analysis");
+    } catch (e) {
+      setGlobalError(e.message || "Erreur lors de l'analyse. Vérifiez votre clé API.");
+      setScreen("input");
+    }
   };
 
   const handleGenerate = async () => {
+    setGlobalError("");
     setScreen("generating");
     try {
       const ctx = `Analyse (score ${analysis.score}/100) — Forts: ${(analysis.points_forts||[]).map(p=>p.titre).join(", ")} — Gaps: ${(analysis.ecarts||[]).map(e=>`${e.titre}(${e.niveau})`).join(", ")}`;
       const result = await callGroq(apiKey, buildCVSystem(config), `CV:\n\n${cvText}\n\n---\n\nOffre:\n\n${jobDesc}\n\n${ctx}\n\nRetourne UNIQUEMENT le JSON.`);
-      setCvData(result); setScreen("result");
-    } catch (e) { setScreen("analysis"); }
+      setCvData(result);
+      setScreen("result");
+    } catch (e) {
+      setGlobalError(e.message || "Erreur lors de la génération.");
+      setScreen("analysis");
+    }
   };
 
   if (!apiKey) return <OnboardingScreen onKeySubmit={handleKeySubmit} />;
   if (screen === "analyzing") return <LoadingScreen message="Analyse en cours…" />;
   if (screen === "generating") return <LoadingScreen message="Génération du CV…" />;
   if (screen === "settings") return <SettingsScreen config={config} onSave={setConfig} onBack={() => setScreen(prevScreen)} apiKey={apiKey} onChangeKey={handleChangeKey} />;
-  if (screen === "analysis" && analysis) return <AnalysisScreen analysis={analysis} onBack={() => setScreen("input")} onGenerate={handleGenerate} onSettings={goSettings} />;
+  if (screen === "analysis" && analysis) return <AnalysisScreen analysis={analysis} onBack={() => setScreen("input")} onGenerate={handleGenerate} onSettings={goSettings} error={globalError} />;
   if (screen === "result" && cvData) return <ResultScreen cvData={cvData} onBack={() => setScreen("analysis")} onRefine={() => setScreen("refine")} pdfReady={pdfReady} onSettings={goSettings} />;
   if (screen === "refine" && cvData) return <RefineScreen cvData={cvData} onBack={() => setScreen("result")} pdfReady={pdfReady} onSettings={goSettings} config={config} apiKey={apiKey} />;
-  return <InputScreen onAnalyze={handleAnalyze} onSettings={goSettings} />;
+  return <InputScreen onAnalyze={handleAnalyze} onSettings={goSettings} error={globalError} onClearError={() => setGlobalError("")} />;
 }
