@@ -83,17 +83,48 @@ const DEFAULT_CONFIG = {
 };
 
 function buildAnalysisSystem(config) {
-  return `Tu es un expert RH senior. Analyse la correspondance entre un CV et une offre d'emploi.\n\nINSTRUCTIONS:\n${config.analyse}\n\nTON:\n${config.ton}\n\nRetourne UNIQUEMENT un JSON valide (sans markdown, sans backticks):\n{"score":72,"titre_poste":"...","nom_candidat":"...","resume":"...","points_forts":[{"titre":"...","detail":"..."}],"ecarts":[{"titre":"...","detail":"...","niveau":"critique|important|mineur"}],"recommandations":["..."]}`;
+  return `Tu es un expert RH. Analyse la correspondance CV/offre d'emploi.
+
+INSTRUCTIONS: ${config.analyse}
+TON: ${config.ton}
+
+IMPORTANT: Retourne UNIQUEMENT un objet JSON compact, sans markdown, sans texte avant ou après.
+Maximum 4 points_forts, 4 ecarts, 3 recommandations. Sois concis dans les "detail".
+
+Format strict:
+{"score":72,"titre_poste":"...","nom_candidat":"...","resume":"2 phrases max","points_forts":[{"titre":"court","detail":"1 phrase"}],"ecarts":[{"titre":"court","detail":"1 phrase","niveau":"critique|important|mineur"}],"recommandations":["phrase courte"]}`;
 }
+
 function buildCVSystem(config) {
-  return `Tu es un expert RH. Réécris le CV selon l'analyse fournie.\n\nINSTRUCTIONS:\n${config.generation}\n\nTON:\n${config.ton}\n\nRetourne UNIQUEMENT un JSON valide (sans markdown, sans backticks):\n{"nom":"...","titre":"...","contact":"...","profil":"...","experiences":[{"entreprise":"...","poste":"...","dates":"...","points":["..."]}],"competences":["..."],"formation":[{"diplome":"...","institution":"...","annee":"..."}],"notes":["..."]}`;
+  return `Tu es un expert RH. Réécris le CV selon l'analyse fournie.
+
+INSTRUCTIONS: ${config.generation}
+TON: ${config.ton}
+
+IMPORTANT: Retourne UNIQUEMENT un objet JSON compact, sans markdown, sans texte avant ou après.
+Maximum 3 points par expérience. Maximum 8 compétences. Profil = 2 phrases max.
+
+Format strict:
+{"nom":"...","titre":"...","contact":"...","profil":"2 phrases","experiences":[{"entreprise":"...","poste":"...","dates":"...","points":["point 1","point 2","point 3"]}],"competences":["..."],"formation":[{"diplome":"...","institution":"...","annee":"..."}],"notes":["changement 1","changement 2"]}`;
 }
+
 function buildRefineSystem(config) {
-  return `Tu es un expert en rédaction de CV.\n\nINSTRUCTIONS:\n${config.affinement}\n\nTON:\n${config.ton}\n\nSi tu dois demander confirmation, réponds UNIQUEMENT ce JSON:\n{"action":"confirm","question":"...","options":["...","..."],"cv":{...cv inchangé...}}\n\nSi tu appliques directement, réponds UNIQUEMENT ce JSON:\n{"action":"update","cv":{...cv mis à jour...},"explication":"..."}`;
+  return `Tu es un expert en rédaction de CV.
+
+INSTRUCTIONS: ${config.affinement}
+TON: ${config.ton}
+
+IMPORTANT: Retourne UNIQUEMENT un objet JSON compact, sans markdown, sans texte avant ou après.
+
+Si confirmation requise:
+{"action":"confirm","question":"question courte","options":["Oui","Non"],"cv":{...cv inchangé...}}
+
+Si modification directe:
+{"action":"update","cv":{...cv complet mis à jour...},"explication":"1 phrase"}`;
 }
 
 // ── Groq API call ─────────────────────────────────────────────────
-async function callGroq(apiKey, system, userText, max_tokens = 4000) {
+async function callGroq(apiKey, system, userText, max_tokens = 6000) {
   const resp = await fetch("/api/groq", {
     method: "POST",
     headers: {
@@ -113,9 +144,28 @@ async function callGroq(apiKey, system, userText, max_tokens = 4000) {
   const data = await resp.json();
   if (data.error) throw new Error(data.error.message || "Erreur Groq API");
   const raw = data.choices?.[0]?.message?.content?.trim() || "";
-  const clean = raw.replace(/^```json\s*/i, "").replace(/^```\s*/i, "").replace(/\s*```$/i, "").trim();
-  try { return JSON.parse(clean); }
-  catch { const m = clean.match(/\{[\s\S]*\}/); if (m) return JSON.parse(m[0]); throw new Error("Format invalide. Réessayez."); }
+
+  // Extraction robuste du JSON — trouve le premier { et le dernier } correspondant
+  const firstBrace = raw.indexOf("{");
+  const lastBrace = raw.lastIndexOf("}");
+  if (firstBrace === -1 || lastBrace === -1) {
+    throw new Error("Aucun JSON trouvé dans la réponse. Réessayez.");
+  }
+  const jsonStr = raw.slice(firstBrace, lastBrace + 1);
+  try {
+    return JSON.parse(jsonStr);
+  } catch (e) {
+    // Tentative de réparation : supprimer les caractères problématiques
+    const cleaned = jsonStr
+      .replace(/[\x00-\x1F\x7F]/g, " ") // caractères de contrôle
+      .replace(/,\s*([}\]])/g, "$1")      // trailing commas
+      .replace(/([{,]\s*)(\w+)\s*:/g, '$1"$2":'); // clés sans guillemets
+    try {
+      return JSON.parse(cleaned);
+    } catch {
+      throw new Error("Format de réponse invalide. Réessayez — si ça persiste, simplifiez votre CV ou l'offre d'emploi.");
+    }
+  }
 }
 
 // ── PDF print view (fond blanc, rendu hors écran) ─────────────────
