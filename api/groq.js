@@ -1,8 +1,7 @@
-// api/groq.js — Vercel Serverless Function
+// api/groq.js — Vercel Serverless Function (CommonJS)
 // Proxy pour l'API Groq — résout le problème CORS
-// La clé API vient du client (Authorization header) — jamais stockée côté serveur
 
-export default async function handler(req, res) {
+module.exports = async function handler(req, res) {
   // CORS headers
   res.setHeader("Access-Control-Allow-Origin", "*");
   res.setHeader("Access-Control-Allow-Methods", "POST, OPTIONS");
@@ -16,9 +15,9 @@ export default async function handler(req, res) {
     return res.status(405).json({ error: "Method not allowed" });
   }
 
-  const apiKey = req.headers.authorization?.replace("Bearer ", "").trim();
+  const apiKey = req.headers["authorization"]?.replace("Bearer ", "").trim();
   if (!apiKey || !apiKey.startsWith("gsk_")) {
-    return res.status(401).json({ error: "Clé API Groq manquante ou invalide" });
+    return res.status(401).json({ error: "Clé API Groq manquante ou invalide (doit commencer par gsk_)" });
   }
 
   try {
@@ -34,6 +33,7 @@ export default async function handler(req, res) {
     const data = await groqResp.json();
     return res.status(groqResp.status).json(data);
   } catch (err) {
-    return res.status(500).json({ error: err.message });
+    console.error("Groq proxy error:", err);
+    return res.status(500).json({ error: "Erreur proxy: " + err.message });
   }
-}
+};
