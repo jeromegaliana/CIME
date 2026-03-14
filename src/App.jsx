@@ -82,32 +82,79 @@ const DEFAULT_CONFIG = {
 - Encourageant sans être excessif`,
 };
 
+// ── Delimiter-based text parsers (plus fiable que JSON) ───────────
+
 function buildAnalysisSystem(config) {
   return `Tu es un expert RH. Analyse la correspondance CV/offre d'emploi.
 
 INSTRUCTIONS: ${config.analyse}
 TON: ${config.ton}
 
-Retourne UNIQUEMENT un objet JSON valide, sans markdown ni texte avant/après.
-Sois concis dans les textes (1-2 phrases par champ).
-N'utilise jamais de guillemets doubles à l'intérieur des valeurs de texte — utilise des apostrophes si nécessaire.
+Réponds en utilisant EXACTEMENT ce format avec les délimiteurs (ne change pas les délimiteurs):
 
-{"score":72,"titre_poste":"...","nom_candidat":"...","resume":"...","points_forts":[{"titre":"...","detail":"..."}],"ecarts":[{"titre":"...","detail":"...","niveau":"critique|important|mineur"}],"recommandations":["..."]}`;
+SCORE: [nombre entre 0 et 100]
+TITRE_POSTE: [titre du poste de l'offre]
+NOM_CANDIDAT: [prénom et nom du candidat]
+RESUME: [2-3 phrases sur la correspondance]
+---POINTS_FORTS---
+TITRE: [titre court]
+DETAIL: [1-2 phrases]
+TITRE: [titre court]
+DETAIL: [1-2 phrases]
+TITRE: [titre court]
+DETAIL: [1-2 phrases]
+---ECARTS---
+TITRE: [titre court]
+NIVEAU: [critique|important|mineur]
+DETAIL: [1-2 phrases]
+TITRE: [titre court]
+NIVEAU: [critique|important|mineur]
+DETAIL: [1-2 phrases]
+TITRE: [titre court]
+NIVEAU: [critique|important|mineur]
+DETAIL: [1-2 phrases]
+---RECOMMANDATIONS---
+[recommandation 1]
+[recommandation 2]
+[recommandation 3]
+---FIN---`;
 }
 
 function buildCVSystem(config) {
-  return `Tu es un expert RH. Réécris le CV en préservant TOUT le contenu original — n'omets aucune expérience, aucune réalisation, aucune compétence. Adapte uniquement le vocabulaire et la formulation.
+  return `Tu es un expert RH. Réécris le CV en préservant TOUT le contenu original — n'omets aucune expérience, aucune réalisation, aucune compétence présente dans le CV original.
 
 INSTRUCTIONS: ${config.generation}
 TON: ${config.ton}
 
-Retourne UNIQUEMENT un objet JSON valide, sans markdown ni texte avant/après.
-RÈGLES JSON STRICTES:
-- N'utilise jamais de guillemets doubles dans les valeurs texte — remplace par des apostrophes
-- Échappe les caractères spéciaux
-- Tous les champs sont obligatoires
+Réponds en utilisant EXACTEMENT ce format avec les délimiteurs (ne change pas les délimiteurs):
 
-{"nom":"...","titre":"...","contact":"...","profil":"...","experiences":[{"entreprise":"...","poste":"...","dates":"...","points":["..."]}],"competences":["..."],"formation":[{"diplome":"...","institution":"...","annee":"..."}],"notes":["..."]}`;
+NOM: [prénom et nom]
+TITRE: [titre du poste ciblé]
+CONTACT: [email | téléphone | LinkedIn | ville]
+PROFIL: [profil professionnel reformulé]
+---EXPERIENCES---
+ENTREPRISE: [nom de l'entreprise]
+POSTE: [titre du poste]
+DATES: [période]
+POINT: [réalisation 1]
+POINT: [réalisation 2]
+POINT: [réalisation 3]
+ENTREPRISE: [nom de l'entreprise]
+POSTE: [titre du poste]
+DATES: [période]
+POINT: [réalisation]
+---COMPETENCES---
+[compétence 1]
+[compétence 2]
+[compétence 3]
+---FORMATION---
+DIPLOME: [diplôme]
+INSTITUTION: [établissement]
+ANNEE: [année]
+---NOTES---
+[changement clé 1]
+[changement clé 2]
+---FIN---`;
 }
 
 function buildRefineSystem(config) {
@@ -116,15 +163,144 @@ function buildRefineSystem(config) {
 INSTRUCTIONS: ${config.affinement}
 TON: ${config.ton}
 
-Retourne UNIQUEMENT un objet JSON valide, sans markdown ni texte avant/après.
-N'utilise pas de guillemets doubles dans les valeurs texte.
+Si tu dois demander confirmation, réponds:
+ACTION: confirm
+QUESTION: [ta question]
+OPTION1: [option 1]
+OPTION2: [option 2]
+---FIN---
 
-Si confirmation requise: {"action":"confirm","question":"...","options":["Oui","Non"],"cv":{...cv complet inchangé...}}
-Si modification: {"action":"update","cv":{...cv complet mis à jour...},"explication":"..."}`;
+Si tu appliques une modification, réponds avec le CV complet mis à jour:
+ACTION: update
+EXPLICATION: [ce que tu as changé en 1 phrase]
+NOM: [prénom et nom]
+TITRE: [titre du poste ciblé]
+CONTACT: [contact]
+PROFIL: [profil]
+---EXPERIENCES---
+ENTREPRISE: [nom]
+POSTE: [poste]
+DATES: [dates]
+POINT: [réalisation]
+---COMPETENCES---
+[compétence]
+---FORMATION---
+DIPLOME: [diplôme]
+INSTITUTION: [institution]
+ANNEE: [année]
+---NOTES---
+[note]
+---FIN---`;
 }
 
-// ── Groq API call ─────────────────────────────────────────────────
-async function callGroq(apiKey, system, userText, max_tokens = 8000) {
+// ── Parse fonctions — texte délimité vers objets JS ───────────────
+
+function parseAnalysis(text) {
+  const get = (key) => {
+    const m = text.match(new RegExp(`^${key}:\\s*(.+)`, "m"));
+    return m ? m[1].trim() : "";
+  };
+
+  const score = parseInt(get("SCORE")) || 50;
+  const titre_poste = get("TITRE_POSTE");
+  const nom_candidat = get("NOM_CANDIDAT");
+  const resume = get("RESUME");
+
+  // Points forts
+  const pfSection = text.split("---POINTS_FORTS---")[1]?.split("---ECARTS---")[0] || "";
+  const points_forts = [];
+  const pfTitres = [...pfSection.matchAll(/^TITRE:\s*(.+)/gm)];
+  const pfDetails = [...pfSection.matchAll(/^DETAIL:\s*(.+)/gm)];
+  pfTitres.forEach((t, i) => {
+    points_forts.push({ titre: t[1].trim(), detail: pfDetails[i]?.[1]?.trim() || "" });
+  });
+
+  // Écarts
+  const ecSection = text.split("---ECARTS---")[1]?.split("---RECOMMANDATIONS---")[0] || "";
+  const ecarts = [];
+  const ecTitres = [...ecSection.matchAll(/^TITRE:\s*(.+)/gm)];
+  const ecNiveaux = [...ecSection.matchAll(/^NIVEAU:\s*(.+)/gm)];
+  const ecDetails = [...ecSection.matchAll(/^DETAIL:\s*(.+)/gm)];
+  ecTitres.forEach((t, i) => {
+    ecarts.push({
+      titre: t[1].trim(),
+      niveau: ecNiveaux[i]?.[1]?.trim() || "mineur",
+      detail: ecDetails[i]?.[1]?.trim() || "",
+    });
+  });
+
+  // Recommandations
+  const recSection = text.split("---RECOMMANDATIONS---")[1]?.split("---FIN---")[0] || "";
+  const recommandations = recSection.split("\n").map(l => l.trim()).filter(l => l && !l.startsWith("---"));
+
+  return { score, titre_poste, nom_candidat, resume, points_forts, ecarts, recommandations };
+}
+
+function parseCVData(text) {
+  const get = (key) => {
+    const m = text.match(new RegExp(`^${key}:\\s*(.+)`, "m"));
+    return m ? m[1].trim() : "";
+  };
+
+  const nom = get("NOM");
+  const titre = get("TITRE");
+  const contact = get("CONTACT");
+  const profil = get("PROFIL");
+
+  // Expériences
+  const expSection = text.split("---EXPERIENCES---")[1]?.split("---COMPETENCES---")[0] || "";
+  const experiences = [];
+  const expBlocks = expSection.split(/(?=^ENTREPRISE:)/m).filter(b => b.trim());
+  for (const block of expBlocks) {
+    const entreprise = block.match(/^ENTREPRISE:\s*(.+)/m)?.[1]?.trim() || "";
+    const poste = block.match(/^POSTE:\s*(.+)/m)?.[1]?.trim() || "";
+    const dates = block.match(/^DATES:\s*(.+)/m)?.[1]?.trim() || "";
+    const points = [...block.matchAll(/^POINT:\s*(.+)/gm)].map(m => m[1].trim());
+    if (entreprise) experiences.push({ entreprise, poste, dates, points });
+  }
+
+  // Compétences
+  const compSection = text.split("---COMPETENCES---")[1]?.split("---FORMATION---")[0] || "";
+  const competences = compSection.split("\n").map(l => l.trim()).filter(l => l && !l.startsWith("---"));
+
+  // Formation
+  const formSection = text.split("---FORMATION---")[1]?.split("---NOTES---")[0] || "";
+  const formation = [];
+  const diplomes = [...formSection.matchAll(/^DIPLOME:\s*(.+)/gm)];
+  const institutions = [...formSection.matchAll(/^INSTITUTION:\s*(.+)/gm)];
+  const annees = [...formSection.matchAll(/^ANNEE:\s*(.+)/gm)];
+  diplomes.forEach((d, i) => {
+    formation.push({
+      diplome: d[1].trim(),
+      institution: institutions[i]?.[1]?.trim() || "",
+      annee: annees[i]?.[1]?.trim() || "",
+    });
+  });
+
+  // Notes
+  const notesSection = text.split("---NOTES---")[1]?.split("---FIN---")[0] || "";
+  const notes = notesSection.split("\n").map(l => l.trim()).filter(l => l && !l.startsWith("---"));
+
+  return { nom, titre, contact, profil, experiences, competences, formation, notes };
+}
+
+function parseRefine(text) {
+  const action = text.match(/^ACTION:\s*(.+)/m)?.[1]?.trim() || "update";
+
+  if (action === "confirm") {
+    const question = text.match(/^QUESTION:\s*(.+)/m)?.[1]?.trim() || "";
+    const opt1 = text.match(/^OPTION1:\s*(.+)/m)?.[1]?.trim() || "Oui";
+    const opt2 = text.match(/^OPTION2:\s*(.+)/m)?.[1]?.trim() || "Non";
+    return { action: "confirm", question, options: [opt1, opt2], cv: null };
+  }
+
+  const explication = text.match(/^EXPLICATION:\s*(.+)/m)?.[1]?.trim() || "Modification appliquée.";
+  const cv = parseCVData(text);
+  return { action: "update", cv, explication };
+}
+
+// ── Groq API call (texte brut, plus de JSON) ──────────────────────
+async function callGroq(apiKey, system, userText, parseMode = "cv") {
   const resp = await fetch("/api/groq", {
     method: "POST",
     headers: {
@@ -137,35 +313,18 @@ async function callGroq(apiKey, system, userText, max_tokens = 8000) {
         { role: "system", content: system },
         { role: "user", content: userText },
       ],
-      max_tokens,
-      temperature: 0.3,
+      max_tokens: 8000,
+      temperature: 0.2,
     }),
   });
   const data = await resp.json();
   if (data.error) throw new Error(data.error.message || "Erreur Groq API");
   const raw = data.choices?.[0]?.message?.content?.trim() || "";
+  if (!raw) throw new Error("Réponse vide. Réessayez.");
 
-  // Extraction robuste du JSON — trouve le premier { et le dernier } correspondant
-  const firstBrace = raw.indexOf("{");
-  const lastBrace = raw.lastIndexOf("}");
-  if (firstBrace === -1 || lastBrace === -1) {
-    throw new Error("Aucun JSON trouvé dans la réponse. Réessayez.");
-  }
-  const jsonStr = raw.slice(firstBrace, lastBrace + 1);
-  try {
-    return JSON.parse(jsonStr);
-  } catch (e) {
-    // Tentative de réparation : supprimer les caractères problématiques
-    const cleaned = jsonStr
-      .replace(/[\x00-\x1F\x7F]/g, " ") // caractères de contrôle
-      .replace(/,\s*([}\]])/g, "$1")      // trailing commas
-      .replace(/([{,]\s*)(\w+)\s*:/g, '$1"$2":'); // clés sans guillemets
-    try {
-      return JSON.parse(cleaned);
-    } catch {
-      throw new Error("Format de réponse invalide. Réessayez — si ça persiste, simplifiez votre CV ou l'offre d'emploi.");
-    }
-  }
+  if (parseMode === "analysis") return parseAnalysis(raw);
+  if (parseMode === "refine") return parseRefine(raw);
+  return parseCVData(raw);
 }
 
 // ── PDF print view — CV professionnel fond blanc ──────────────────
@@ -977,15 +1136,21 @@ function RefineScreen({ cvData: initialCv, onBack, pdfReady, onSettings, config,
     setMessages(prev => [...prev, { role: "user", text: t }]);
     setThinking(true);
     try {
-      const result = await callGroq(apiKey, buildRefineSystem(config), `CV actuel:\n${JSON.stringify(cvData, null, 2)}\n\nDemande: ${t}`);
+      // Sérialiser le CV courant en format délimité pour l'envoyer à Groq
+      const cvSerialized = `NOM: ${cvData.nom}\nTITRE: ${cvData.titre}\nCONTACT: ${cvData.contact}\nPROFIL: ${cvData.profil}\n---EXPERIENCES---\n${(cvData.experiences||[]).map(e=>`ENTREPRISE: ${e.entreprise}\nPOSTE: ${e.poste}\nDATES: ${e.dates}\n${(e.points||[]).map(p=>`POINT: ${p}`).join("\n")}`).join("\n")}\n---COMPETENCES---\n${(cvData.competences||[]).join("\n")}\n---FORMATION---\n${(cvData.formation||[]).map(f=>`DIPLOME: ${f.diplome}\nINSTITUTION: ${f.institution}\nANNEE: ${f.annee}`).join("\n")}\n---NOTES---\n${(cvData.notes||[]).join("\n")}\n---FIN---`;
+      const result = await callGroq(apiKey, buildRefineSystem(config),
+        `CV ACTUEL:\n${cvSerialized}\n\nDEMANDE: ${t}`,
+        "refine"
+      );
       if (result.action === "confirm") {
-        setCvData(result.cv || cvData);
-        setMessages(prev => [...prev, { role: "confirm", question: result.question, options: result.options || ["Oui, l'ajouter", "Non, ignorer"] }]);
+        setMessages(prev => [...prev, { role: "confirm", question: result.question, options: result.options || ["Oui", "Non"] }]);
       } else {
-        setCvData(result.cv || result);
+        if (result.cv) setCvData(result.cv);
         setMessages(prev => [...prev, { role: "assistant", text: `✓ ${result.explication || "Modification appliquée."}`, type: "update" }]);
       }
-    } catch (e) { setMessages(prev => [...prev, { role: "assistant", text: `Erreur : ${e.message}`, type: "error" }]); }
+    } catch (e) {
+      setMessages(prev => [...prev, { role: "assistant", text: `Erreur : ${e.message}`, type: "error" }]);
+    }
     setThinking(false);
   };
 
@@ -1079,7 +1244,10 @@ export default function App() {
     setGlobalError("");
     setScreen("analyzing");
     try {
-      const result = await callGroq(apiKey, buildAnalysisSystem(config), `CV:\n\n${cv}\n\n---\n\nOffre d'emploi:\n\n${job}\n\nRetourne UNIQUEMENT le JSON.`);
+      const result = await callGroq(apiKey, buildAnalysisSystem(config),
+        `CV:\n\n${cv}\n\n---\n\nOffre d'emploi:\n\n${job}`,
+        "analysis"
+      );
       setAnalysis(result);
       setScreen("analysis");
     } catch (e) {
@@ -1092,8 +1260,11 @@ export default function App() {
     setGlobalError("");
     setScreen("generating");
     try {
-      const ctx = `Analyse (score ${analysis.score}/100) — Forts: ${(analysis.points_forts||[]).map(p=>p.titre).join(", ")} — Gaps: ${(analysis.ecarts||[]).map(e=>`${e.titre}(${e.niveau})`).join(", ")}`;
-      const result = await callGroq(apiKey, buildCVSystem(config), `CV:\n\n${cvText}\n\n---\n\nOffre:\n\n${jobDesc}\n\n${ctx}\n\nRetourne UNIQUEMENT le JSON.`);
+      const ctx = `Analyse (score ${analysis.score}/100) — Points forts: ${(analysis.points_forts||[]).map(p=>p.titre).join(", ")} — Gaps: ${(analysis.ecarts||[]).map(e=>`${e.titre}(${e.niveau})`).join(", ")}`;
+      const result = await callGroq(apiKey, buildCVSystem(config),
+        `CV ORIGINAL:\n\n${cvText}\n\n---\n\nOFFRE D'EMPLOI:\n\n${jobDesc}\n\n---\n\nCONTEXTE ANALYSE:\n${ctx}`,
+        "cv"
+      );
       setCvData(result);
       setScreen("result");
     } catch (e) {
